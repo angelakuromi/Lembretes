@@ -8,7 +8,11 @@ from jnius import autoclass, cast
 BASE = os.environ.get('ANDROID_PRIVATE', '.')
 RFILE = os.path.join(BASE, 'lembretes.json')    # escrito pelo app
 FFILE = os.path.join(BASE, 'disparados.json')   # escrito só por este serviço
-CANAL = 'lembretes_silenciosos'
+CFG = os.path.join(BASE, 'config.json')         # nomes (a IA e você)
+AFILE = os.path.join(BASE, 'confirmados.txt')   # escrito pela tela "Entendi"
+CANAL = 'jane_lembretes'
+REPETICOES = 3          # quantas vezes avisa se você não confirmar
+INTERVALO = 10 * 60     # segundos entre uma repetição e outra
 
 
 def carregar(caminho, padrao):
@@ -26,6 +30,24 @@ def salvar(caminho, dados):
     os.replace(tmp, caminho)
 
 
+def confirmados():
+    # lê quais lembretes você já confirmou: {id: horário confirmado}
+    d = {}
+    try:
+        with open(AFILE, encoding='utf-8') as f:
+            for linha in f:
+                if '|' not in linha:
+                    continue
+                i, o = linha.strip().split('|', 1)
+                try:
+                    d[i] = max(d.get(i, 0), int(o))
+                except ValueError:
+                    pass
+    except Exception:
+        pass
+    return d
+
+
 try:
     os.environ['TZ'] = autoclass('java.util.TimeZone').getDefault().getID()
     time.tzset()
@@ -36,35 +58,52 @@ PythonService = autoclass('org.kivy.android.PythonService')
 Context = autoclass('android.content.Context')
 Builder = autoclass('android.app.Notification$Builder')
 PendingIntent = autoclass('android.app.PendingIntent')
+Intent = autoclass('android.content.Intent')
 SDK = autoclass('android.os.Build$VERSION').SDK_INT
 
 
-def notificar(texto, nid):
+def notificar(texto, rid, occ, nid):
     ctx = PythonService.mService
+    cfg = carregar(CFG, {})
+    ia = cfg.get('ia') or 'Jane'
+    eu = cfg.get('eu') or 'Angela'
     nm = cast('android.app.NotificationManager',
               ctx.getSystemService(Context.NOTIFICATION_SERVICE))
 
     if SDK >= 26:
         Canal = autoclass('android.app.NotificationChannel')
-        canal = Canal(CANAL, 'Lembretes', 3)   # 3 = padrão, mas sem som
+        canal = Canal(CANAL, 'Lembretes da ' + ia, 4)   # 4 = acende a tela, mas sem som
         canal.setSound(None, None)
         canal.enableVibration(False)
+        canal.enableLights(False)
+        canal.setLockscreenVisibility(1)
         nm.createNotificationChannel(canal)
         b = Builder(ctx, CANAL)
     else:
         b = Builder(ctx)
 
-    # Ao tocar na notificação, abre o app
-    intent = ctx.getPackageManager().getLaunchIntentForPackage(ctx.getPackageName())
-    intent.setFlags(268435456 | 536870912)  # NEW_TASK | SINGLE_TOP
+    # Tela de lembrete (Java), com o botão "Entendi"
+    pacote = ctx.getPackageName()
+    intent = Intent()
+    intent.setClassName(pacote, pacote + '.AlarmeActivity')
+    intent.setFlags(268435456 | 134217728 | 8388608)  # NEW_TASK | MULTIPLE_TASK | EXCLUDE_FROM_RECENTS
+    intent.putExtra('rid', rid)
+    intent.putExtra('occ', str(occ))
+    intent.putExtra('texto', texto)
+    intent.putExtra('ia', ia)
+    intent.putExtra('eu', eu)
+    intent.putExtra('nid', str(nid))
+    intent.putExtra('afile', AFILE)
     pi = PendingIntent.getActivity(ctx, nid, intent, 67108864 | 134217728)  # IMMUTABLE | UPDATE_CURRENT
 
-    cfg = carregar(os.path.join(BASE, 'config.json'), {})
-    b.setContentTitle(cfg.get('ia') or 'Jane')
-    b.setContentText('{}, é hora de: {}'.format(cfg.get('eu') or 'Angela', texto))
+    b.setContentTitle(ia)
+    b.setContentText('{}, é hora de: {}'.format(eu, texto))
     b.setSmallIcon(ctx.getApplicationInfo().icon)
     b.setAutoCancel(True)
     b.setContentIntent(pi)
+    b.setFullScreenIntent(pi, True)    # acende a tela e abre a tela de lembrete
+    b.setCategory('reminder')
+    b.setVisibility(1)
     nm.notify(nid, b.build())
 
 
@@ -90,34 +129,54 @@ def main():
         agora = time.time()
         rems = carregar(RFILE, [])
         feitos = carregar(FFILE, {})
-        if isinstance(feitos, list):          # formato antigo
+        if not isinstance(feitos, dict):          # formato antigo
             feitos = {i: agora for i in feitos}
+        acks = confirmados()
         mudou = False
+
         for r in rems:
-            nid = int(r['id'][:7], 16)
+            rid = r['id']
+            nid = int(rid[:7], 16)
             if r.get('dias') is not None:
                 # lembrete fixo: repete nos dias da semana escolhidos
                 occ = ultima_ocorrencia(r, agora)
-                if occ is None or occ <= r.get('criado', 0) or occ <= feitos.get(r['id'], 0):
+                if occ is None or occ <= r.get('criado', 0):
                     continue
-                if agora - occ < 3 * 3600:
-                    try:
-                        notificar(r['texto'], nid)
-                    except Exception as e:
-                        print('notificar:', e)
-                feitos[r['id']] = occ
+                limite = 3 * 3600
+            else:
+                if r['quando'] > agora:
+                    continue
+                occ = r['quando']
+                limite = 12 * 3600
+            occ = int(occ)
+
+            if acks.get(rid, 0) >= occ:      # você já confirmou
+                continue
+            est = feitos.get(rid)
+            if isinstance(est, (int, float)):  # formato antigo (já avisado)
+                est = {'occ': occ if est >= occ else 0, 'n': REPETICOES, 'last': est}
+            if not isinstance(est, dict) or est.get('occ') != occ:
+                est = {'occ': occ, 'n': 0, 'last': 0}
+            if est['n'] >= REPETICOES:
+                if feitos.get(rid) != est:
+                    feitos[rid] = est
+                    mudou = True
+                continue
+            if est['n'] == 0 and agora - occ > limite:
+                est['n'] = REPETICOES        # passou tempo demais (celular desligado): não avisa
+                feitos[rid] = est
                 mudou = True
                 continue
-            if r['id'] in feitos or r['quando'] > agora:
-                continue
-            # se o celular ficou desligado por mais de 12h, não avisa mais
-            if agora - r['quando'] < 12 * 3600:
+            if est['n'] == 0 or agora - est['last'] >= INTERVALO:
                 try:
-                    notificar(r['texto'], nid)
+                    notificar(r['texto'], rid, occ, nid)
                 except Exception as e:
                     print('notificar:', e)
-            feitos[r['id']] = agora
-            mudou = True
+                est['n'] += 1
+                est['last'] = agora
+                feitos[rid] = est
+                mudou = True
+
         ids = set(r['id'] for r in rems)
         limpos = {i: v for i, v in feitos.items() if i in ids}
         if mudou or len(limpos) != len(feitos):
