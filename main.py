@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import math
 import time
 import uuid
 import random
@@ -12,13 +13,16 @@ from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.lang import Builder
 from kivy.metrics import dp
-from kivy.properties import ListProperty
+from kivy.graphics import Color, Ellipse, Line, Triangle
+from kivy.properties import ListProperty, StringProperty
+from kivy.uix.behaviors import ButtonBehavior, ToggleButtonBehavior
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
+from kivy.uix.widget import Widget
 from kivy.utils import platform
 
 # Garante o fuso horário correto do celular
@@ -344,36 +348,167 @@ def achar_nome(p, t, padroes):
 
 
 # ---------------------------------------------------------------
-# Interface (tema escuro)
+# Interface (preto e violeta)
 # ---------------------------------------------------------------
-FUNDO = (0.07, 0.08, 0.11, 1)
+FUNDO = (0.0, 0.0, 0.0, 1)
+
+
+def arco(cx, cy, r, a0, a1, n=18):
+    pts = []
+    for i in range(n + 1):
+        a = math.radians(a0 + (a1 - a0) * i / n)
+        pts += [cx + r * math.cos(a), cy + r * math.sin(a)]
+    return pts
+
+
+class Icone(ButtonBehavior, Widget):
+    # Ícones minimalistas desenhados à mão (sem fontes nem imagens)
+    tipo = StringProperty('pontos')
+    cor = ListProperty([0.93, 0.93, 0.97, 1])
+    fundo = ListProperty([0, 0, 0, 0])
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        for nome in ('pos', 'size', 'tipo', 'cor', 'fundo', 'state'):
+            self.bind(**{nome: self.desenhar})
+        self.desenhar()
+
+    def desenhar(self, *a):
+        self.canvas.clear()
+        cx, cy = self.center
+        s = min(self.width, self.height)
+        com_fundo = self.fundo[3] > 0
+        u = s * (0.44 if com_fundo else 0.5)
+        lw = dp(1.6)
+        t = self.tipo
+        with self.canvas:
+            if com_fundo:
+                f = self.fundo
+                Color(f[0], f[1], f[2], f[3] * (0.75 if self.state == 'down' else 1))
+                Ellipse(pos=(cx - s / 2, cy - s / 2), size=(s, s))
+                Color(1, 1, 1, 1)
+            else:
+                Color(*self.cor)
+            if t == 'pontos':
+                d = u * 0.2
+                for k in (-1, 0, 1):
+                    Ellipse(pos=(cx - d / 2, cy + k * u * 0.34 - d / 2), size=(d, d))
+            elif t == 'sino':
+                r = u * 0.26
+                base = cy + u * 0.1
+                Line(points=arco(cx, base, r, 0, 180), width=lw)
+                Line(points=[cx - r, base, cx - r - u * 0.05, cy - u * 0.2,
+                             cx + r + u * 0.05, cy - u * 0.2, cx + r, base], width=lw)
+                Line(points=[cx, base + r, cx, base + r + u * 0.06], width=lw)
+                Line(points=arco(cx, cy - u * 0.27, u * 0.07, 180, 360), width=lw)
+            elif t == 'mic':
+                Line(rounded_rectangle=(cx - u * 0.14, cy - u * 0.08, u * 0.28, u * 0.5, u * 0.14),
+                     width=lw)
+                Line(points=arco(cx, cy - u * 0.04, u * 0.26, 180, 360), width=lw)
+                Line(points=[cx, cy - u * 0.30, cx, cy - u * 0.42], width=lw)
+                Line(points=[cx - u * 0.12, cy - u * 0.42, cx + u * 0.12, cy - u * 0.42], width=lw)
+            elif t == 'enviar':
+                Triangle(points=[cx - u * 0.34, cy + u * 0.32, cx + u * 0.40, cy,
+                                 cx - u * 0.34, cy - u * 0.32])
+                Color(*self.fundo)
+                Triangle(points=[cx - u * 0.34, cy + u * 0.10, cx - u * 0.08, cy,
+                                 cx - u * 0.34, cy - u * 0.10])
+            elif t == 'cima':
+                Line(points=[cx - u * 0.3, cy - u * 0.12, cx, cy + u * 0.16,
+                             cx + u * 0.3, cy - u * 0.12], width=lw)
+            elif t == 'baixo':
+                Line(points=[cx - u * 0.3, cy + u * 0.12, cx, cy - u * 0.16,
+                             cx + u * 0.3, cy + u * 0.12], width=lw)
+
+
+class PillBtn(ButtonBehavior, Label):
+    pass
+
+
+class Chip(ToggleButtonBehavior, Label):
+    pass
 
 
 class Bolha(Label):
-    bg = ListProperty([0.17, 0.18, 0.23, 1])
+    bg = ListProperty([0.10, 0.10, 0.13, 1])
+
+
+class CartaoHora(BoxLayout):
+    # Caixa da Jane para escolher o horário, como num app de despertador
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        t = datetime.now() + timedelta(minutes=10)
+        self.ids.hora.text = '{:02d}'.format(t.hour)
+        self.ids.minuto.text = '{:02d}'.format(t.minute - t.minute % 5)
+
+    def limitar(self, campo, maximo):
+        t = ''.join(ch for ch in campo.text if ch.isdigit())[:2]
+        if t and int(t) > maximo:
+            t = str(maximo)
+        if t != campo.text:
+            campo.text = t
+
+    def ajustar(self, campo, passo, limite):
+        try:
+            v = int(campo.text)
+        except ValueError:
+            v = 0
+        campo.text = '{:02d}'.format((v + passo) % limite)
+
+    def programar(self):
+        try:
+            h = int(self.ids.hora.text)
+            m = int(self.ids.minuto.text or 0)
+        except ValueError:
+            return
+        if not (0 <= h <= 23 and 0 <= m <= 59):
+            return
+        dias = [i for i in range(7) if self.ids['dia%d' % i].state == 'down']
+        App.get_running_app().programar_cartao(h, m, dias, self.ids.tarefa.text.strip())
 
 
 KV = '''
 <Button>:
     background_normal: ''
     background_down: ''
-    background_color: (0.32, 0.36, 0.54, 1) if self.state == 'down' else (0.20, 0.22, 0.31, 1)
+    background_color: (0.30, 0.20, 0.55, 1) if self.state == 'down' else (0.12, 0.10, 0.18, 1)
     color: 0.93, 0.93, 0.97, 1
 
 <TextInput>:
     background_normal: ''
     background_active: ''
-    background_color: 0.15, 0.16, 0.22, 1
+    background_color: 0.12, 0.10, 0.17, 1
     foreground_color: 0.95, 0.95, 0.98, 1
-    hint_text_color: 0.52, 0.55, 0.66, 1
-    cursor_color: 0.70, 0.76, 1, 1
+    hint_text_color: 0.52, 0.50, 0.64, 1
+    cursor_color: 0.62, 0.45, 1, 1
     padding: dp(12), dp(14), dp(12), dp(12)
 
 <Popup>:
     background: ''
-    background_color: 0.11, 0.12, 0.17, 1
-    separator_color: 0.45, 0.50, 0.85, 1
+    background_color: 0.04, 0.04, 0.06, 1
+    separator_color: 0.55, 0.36, 0.96, 1
     title_color: 0.93, 0.93, 0.97, 1
+
+<PillBtn>:
+    color: 1, 1, 1, 1
+    bold: True
+    canvas.before:
+        Color:
+            rgba: (0.68, 0.52, 1, 1) if self.state == 'down' else (0.55, 0.36, 0.96, 1)
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [self.height / 2]
+
+<Chip>:
+    color: 0.93, 0.93, 0.97, 1
+    font_size: '14sp'
+    canvas.before:
+        Color:
+            rgba: (0.55, 0.36, 0.96, 1) if self.state == 'down' else (0.14, 0.12, 0.20, 1)
+        Ellipse:
+            pos: self.center_x - min(self.width, self.height) / 2, self.center_y - min(self.width, self.height) / 2
+            size: min(self.width, self.height), min(self.width, self.height)
 
 <Bolha>:
     size_hint_y: None
@@ -387,37 +522,190 @@ KV = '''
         RoundedRectangle:
             pos: self.x + dp(4), self.y + dp(2)
             size: self.width - dp(8), self.height - dp(4)
-            radius: [dp(14)]
+            radius: [dp(16)]
+
+<CartaoHora>:
+    orientation: 'vertical'
+    size_hint_y: None
+    height: dp(384)
+    padding: dp(14)
+    spacing: dp(8)
+    canvas.before:
+        Color:
+            rgba: 0.08, 0.06, 0.13, 1
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(20)]
+        Color:
+            rgba: 0.55, 0.36, 0.96, 0.45
+        Line:
+            rounded_rectangle: self.x, self.y, self.width, self.height, dp(20)
+            width: 1
+    Label:
+        text: app.ia + ': que horas devo te lembrar?'
+        color: 0.93, 0.93, 0.97, 1
+        size_hint_y: None
+        height: dp(26)
+        text_size: self.size
+        halign: 'left'
+        valign: 'middle'
+    BoxLayout:
+        size_hint_y: None
+        height: dp(130)
+        spacing: dp(4)
+        Widget:
+        BoxLayout:
+            orientation: 'vertical'
+            size_hint_x: None
+            width: dp(90)
+            Icone:
+                tipo: 'cima'
+                size_hint_y: None
+                height: dp(34)
+                on_release: root.ajustar(hora, 1, 24)
+            TextInput:
+                id: hora
+                text: '08'
+                font_size: '44sp'
+                halign: 'center'
+                input_filter: 'int'
+                multiline: False
+                write_tab: False
+                background_color: 0, 0, 0, 0
+                padding: 0, dp(8), 0, 0
+                on_text: root.limitar(self, 23)
+            Icone:
+                tipo: 'baixo'
+                size_hint_y: None
+                height: dp(34)
+                on_release: root.ajustar(hora, -1, 24)
+        Label:
+            text: ':'
+            font_size: '44sp'
+            color: 0.93, 0.93, 0.97, 1
+            size_hint_x: None
+            width: dp(24)
+        BoxLayout:
+            orientation: 'vertical'
+            size_hint_x: None
+            width: dp(90)
+            Icone:
+                tipo: 'cima'
+                size_hint_y: None
+                height: dp(34)
+                on_release: root.ajustar(minuto, 5, 60)
+            TextInput:
+                id: minuto
+                text: '00'
+                font_size: '44sp'
+                halign: 'center'
+                input_filter: 'int'
+                multiline: False
+                write_tab: False
+                background_color: 0, 0, 0, 0
+                padding: 0, dp(8), 0, 0
+                on_text: root.limitar(self, 59)
+            Icone:
+                tipo: 'baixo'
+                size_hint_y: None
+                height: dp(34)
+                on_release: root.ajustar(minuto, -5, 60)
+        Widget:
+    BoxLayout:
+        size_hint_y: None
+        height: dp(40)
+        spacing: dp(6)
+        Chip:
+            id: dia6
+            text: 'D'
+        Chip:
+            id: dia0
+            text: 'S'
+        Chip:
+            id: dia1
+            text: 'T'
+        Chip:
+            id: dia2
+            text: 'Q'
+        Chip:
+            id: dia3
+            text: 'Q'
+        Chip:
+            id: dia4
+            text: 'S'
+        Chip:
+            id: dia5
+            text: 'S'
+    Label:
+        text: 'Sem dias marcados, eu aviso só uma vez.'
+        font_size: '12sp'
+        color: 0.62, 0.50, 0.90, 1
+        size_hint_y: None
+        height: dp(18)
+    TextInput:
+        id: tarefa
+        hint_text: 'Do que devo te lembrar?'
+        multiline: False
+        write_tab: False
+        size_hint_y: None
+        height: dp(46)
+    PillBtn:
+        text: 'Programar'
+        size_hint_y: None
+        height: dp(48)
+        on_release: root.programar()
 
 BoxLayout:
     orientation: 'vertical'
     canvas.before:
         Color:
-            rgba: 0.07, 0.08, 0.11, 1
+            rgba: 0, 0, 0, 1
         Rectangle:
             pos: self.pos
             size: self.size
     BoxLayout:
         size_hint_y: None
-        height: dp(52)
-        padding: dp(6)
-        spacing: dp(6)
-        Button:
-            text: 'Conversas'
-            size_hint_x: 0.32
-            on_release: app.abrir_conversas()
-        Label:
-            id: titulo
-            color: 0.93, 0.93, 0.97, 1
-            bold: True
-            shorten: True
-            text_size: self.size
-            halign: 'center'
-            valign: 'middle'
-        Button:
-            text: 'Lembretes'
-            size_hint_x: 0.32
+        height: dp(60)
+        padding: dp(16), dp(6), dp(6), dp(6)
+        BoxLayout:
+            orientation: 'vertical'
+            Label:
+                id: ia_nome
+                text: 'Jane'
+                font_size: '20sp'
+                bold: True
+                color: 0.93, 0.93, 0.97, 1
+                text_size: self.size
+                halign: 'left'
+                valign: 'bottom'
+            Label:
+                id: titulo
+                font_size: '12sp'
+                color: 0.62, 0.50, 0.90, 1
+                shorten: True
+                text_size: self.size
+                halign: 'left'
+                valign: 'top'
+        Icone:
+            tipo: 'sino'
+            size_hint_x: None
+            width: dp(48)
             on_release: app.abrir_lembretes()
+        Icone:
+            tipo: 'pontos'
+            size_hint_x: None
+            width: dp(48)
+            on_release: app.abrir_conversas()
+    Widget:
+        size_hint_y: None
+        height: dp(1)
+        canvas:
+            Color:
+                rgba: 0.55, 0.36, 0.96, 0.35
+            Rectangle:
+                pos: self.pos
+                size: self.size
     ScrollView:
         id: scroll
         BoxLayout:
@@ -425,32 +713,43 @@ BoxLayout:
             orientation: 'vertical'
             size_hint_y: None
             height: self.minimum_height
-            spacing: dp(4)
-            padding: dp(6)
+            spacing: dp(6)
+            padding: dp(8)
     BoxLayout:
         size_hint_y: None
-        height: dp(56)
-        padding: dp(6)
-        spacing: dp(6)
-        TextInput:
-            id: entrada
-            hint_text: 'Escreva seu lembrete...'
-            multiline: False
-            write_tab: False
-            on_text_validate: app.enviar()
-        Button:
-            text: 'Voz'
-            size_hint_x: 0.2
-            on_release: app.ouvir()
-        Button:
-            text: 'Enviar'
-            size_hint_x: 0.24
-            on_release: app.enviar()
+        height: dp(64)
+        padding: dp(8)
+        spacing: dp(8)
+        BoxLayout:
+            padding: dp(6), 0
+            canvas.before:
+                Color:
+                    rgba: 0.12, 0.10, 0.17, 1
+                RoundedRectangle:
+                    pos: self.pos
+                    size: self.size
+                    radius: [dp(24)]
+            TextInput:
+                id: entrada
+                hint_text: 'Mensagem'
+                multiline: False
+                write_tab: False
+                background_color: 0, 0, 0, 0
+                on_text: app.atualiza_botao(self.text)
+                on_text_validate: app.enviar()
+        Icone:
+            id: acao
+            tipo: 'mic'
+            fundo: 0.55, 0.36, 0.96, 1
+            size_hint_x: None
+            width: dp(48)
+            on_release: app.acao()
 '''
 
 
 class LembretesApp(App):
-    title = 'Lembretes'
+    title = 'Jane'
+    recarregar = False
 
     # ---------- ciclo de vida ----------
     def build(self):
@@ -466,6 +765,7 @@ class LembretesApp(App):
         return Builder.load_string(KV)
 
     def on_start(self):
+        self.root.ids.ia_nome.text = self.ia
         self.mostrar()
         self.tick(0)
         Clock.schedule_interval(self.tick, 5)
@@ -481,6 +781,7 @@ class LembretesApp(App):
             except Exception as e:
                 print('permissao:', e)
             Clock.schedule_once(self.iniciar_servico, 4)
+            Clock.schedule_once(self.checar_tela_cheia, 8)
 
     def on_pause(self):
         return True
@@ -497,10 +798,51 @@ class LembretesApp(App):
         except Exception as e:
             print('servico:', e)
 
-    def salvar_config(self):
-        salvar(CONFIG, {'ia': self.ia, 'eu': self.eu})
+    def checar_tela_cheia(self, dt=None, forcar=False):
+        # No Android 14 ou mais novo, é preciso liberar "notificações em tela cheia"
+        cfg = carregar(CONFIG, {})
+        if cfg.get('tela_cheia_pedida') and not forcar:
+            return
+        try:
+            from android import mActivity
+            from jnius import autoclass, cast
+            if autoclass('android.os.Build$VERSION').SDK_INT < 34:
+                return
+            Context = autoclass('android.content.Context')
+            nm = cast('android.app.NotificationManager',
+                      mActivity.getSystemService(Context.NOTIFICATION_SERVICE))
+            if nm.canUseFullScreenIntent():
+                return
+            cfg['tela_cheia_pedida'] = True
+            salvar(CONFIG, cfg)
+            self.add(self.conversa(), 'ia',
+                     'Para eu acender a tela na hora do lembrete, preciso que você ative '
+                     '"Notificações em tela cheia" para este app. Vou abrir os ajustes, '
+                     'é só ligar a opção. Se precisar de novo, escreva "tela cheia".')
+            Intent = autoclass('android.content.Intent')
+            Uri = autoclass('android.net.Uri')
+            i = Intent('android.settings.MANAGE_APP_USE_FULL_SCREEN_INTENT',
+                       Uri.parse('package:' + mActivity.getPackageName()))
+            mActivity.startActivity(i)
+        except Exception as e:
+            print('tela cheia:', e)
 
-    # ---------- voz ----------
+    def salvar_config(self):
+        cfg = carregar(CONFIG, {})
+        cfg['ia'] = self.ia
+        cfg['eu'] = self.eu
+        salvar(CONFIG, cfg)
+
+    # ---------- botão de voz / enviar ----------
+    def atualiza_botao(self, texto):
+        self.root.ids.acao.tipo = 'enviar' if texto.strip() else 'mic'
+
+    def acao(self):
+        if self.root.ids.entrada.text.strip():
+            self.enviar()
+        else:
+            self.ouvir()
+
     def ouvir(self):
         c = self.conversa()
         if platform != 'android':
@@ -540,11 +882,9 @@ class LembretesApp(App):
 
     # ---------- conversas ----------
     def boas_vindas(self):
-        return ('Oi, {eu}! Eu sou a {ia}. Me conta o que você quer lembrar e quando, '
-                'digitando ou falando no botão Voz. Por exemplo: me lembra de tomar água '
-                'amanhã às 15h.\n'
-                'Eu só mando uma notificação suave, sem alarme, tá bom?').format(
-                    eu=self.eu, ia=self.ia)
+        return ('Oi, {eu}! Eu sou a {ia}. Escolha o horário na caixa abaixo, ou me peça '
+                'por texto ou por voz. Na hora, a tela acende em silêncio com um botão '
+                'para você confirmar.').format(eu=self.eu, ia=self.ia)
 
     def conversa(self, cid=None):
         cid = cid or self.cur
@@ -555,7 +895,8 @@ class LembretesApp(App):
 
     def nova_conversa(self, render=True):
         c = {'id': uuid.uuid4().hex[:8], 'nome': 'Nova conversa',
-             'msgs': [{'q': 'ia', 't': self.boas_vindas()}], 'pendente': ''}
+             'msgs': [{'q': 'ia', 't': self.boas_vindas()}, {'q': 'cartao', 't': ''}],
+             'pendente': ''}
         self.chats.insert(0, c)
         salvar(CFILE, self.chats)
         if render:
@@ -566,7 +907,7 @@ class LembretesApp(App):
     def bolha(self, m):
         eu = m['q'] == 'eu'
         return Bolha(text=m['t'], halign='right' if eu else 'left',
-                     bg=[0.22, 0.30, 0.48, 1] if eu else [0.17, 0.18, 0.23, 1])
+                     bg=[0.30, 0.18, 0.55, 1] if eu else [0.10, 0.10, 0.13, 1])
 
     def mostrar(self):
         ids = self.root.ids
@@ -574,7 +915,7 @@ class LembretesApp(App):
         ids.titulo.text = c['nome']
         ids.msgs.clear_widgets()
         for m in c['msgs']:
-            ids.msgs.add_widget(self.bolha(m))
+            ids.msgs.add_widget(CartaoHora() if m['q'] == 'cartao' else self.bolha(m))
         Clock.schedule_once(self.descer, 0.1)
 
     def descer(self, *a):
@@ -588,6 +929,59 @@ class LembretesApp(App):
             self.root.ids.msgs.add_widget(self.bolha(m))
             Clock.schedule_once(self.descer, 0.1)
 
+    def tirar_cartao(self, c):
+        antes = len(c['msgs'])
+        c['msgs'] = [m for m in c['msgs'] if m['q'] != 'cartao']
+        if len(c['msgs']) != antes:
+            self.recarregar = True
+
+    def dar_nome(self, c, tarefa):
+        if c['nome'] == 'Nova conversa':
+            c['nome'] = tarefa[:28]
+            self.root.ids.titulo.text = c['nome']
+
+    # ---------- criar lembretes ----------
+    def novo_lembrete(self, c, tarefa, quando):
+        rems = carregar(RFILE, [])
+        rems.append({'id': uuid.uuid4().hex, 'texto': tarefa,
+                     'quando': quando.timestamp(), 'chat': c['id'], 'visto': False})
+        salvar(RFILE, rems)
+        self.dar_nome(c, tarefa)
+        self.tirar_cartao(c)
+
+    def novo_fixo(self, c, tarefa, dias, hh, mm):
+        rems = carregar(RFILE, [])
+        rems.append({'id': uuid.uuid4().hex, 'texto': tarefa, 'dias': dias,
+                     'h': hh, 'm': mm, 'quando': 0, 'criado': time.time(),
+                     'visto_ate': time.time(), 'chat': c['id']})
+        salvar(RFILE, rems)
+        self.dar_nome(c, tarefa)
+        self.tirar_cartao(c)
+
+    def programar_cartao(self, h, m, dias, tarefa):
+        # Chamado pelo botão "Programar" da caixa de horário
+        c = self.conversa()
+        eu = self.eu
+        tarefa = (tarefa[:1].upper() + tarefa[1:]) if tarefa else 'Lembrete'
+        agora = datetime.now()
+        hora = '{:02d}:{:02d}'.format(h, m)
+        if dias:
+            self.novo_fixo(c, tarefa, dias, h, m)
+            resp = ('Combinado, {eu}! "{t}", {d} às {h}. A tela acende em silêncio na hora. '
+                    'Se você apagar esta conversa, esse lembrete fixo para.').format(
+                        eu=eu, t=tarefa, d=desc_dias(dias), h=hora)
+        else:
+            quando = datetime(agora.year, agora.month, agora.day, h, m)
+            if quando <= agora:
+                quando += timedelta(days=1)
+            self.novo_lembrete(c, tarefa, quando)
+            resp = ('Pronto, {eu}! "{t}", {q}. A tela acende em silêncio na hora, '
+                    'com um botão para você confirmar.').format(
+                        eu=eu, t=tarefa, q=fmt(quando, agora))
+        self.add(c, 'eu', '{} - {}'.format(hora, tarefa))
+        self.add(c, 'ia', resp)
+        self.mostrar()
+
     # ---------- chat ----------
     def enviar(self):
         campo = self.root.ids.entrada
@@ -598,6 +992,9 @@ class LembretesApp(App):
         c = self.conversa()
         self.add(c, 'eu', t)
         self.add(c, 'ia', self.responder(c, t))
+        if self.recarregar:
+            self.recarregar = False
+            self.mostrar()
         Clock.schedule_once(lambda dt: setattr(campo, 'focus', True), 0.1)
 
     def responder(self, c, t):
@@ -609,6 +1006,7 @@ class LembretesApp(App):
         if novo:
             self.ia = novo
             self.salvar_config()
+            self.root.ids.ia_nome.text = novo
             return escolha(
                 'Que nome lindo! A partir de agora eu sou a {}. Já guardei para todas as nossas conversas.',
                 'Adorei! Pode me chamar de {} sempre que quiser. Salvei para todas as conversas.',
@@ -629,7 +1027,6 @@ class LembretesApp(App):
         if re.search(r'\b(meus lembretes|lista|listar|o que tenho|proximos)\b', p):
             return self.resumo()
 
-        # --- lembrete ---
         agora = datetime.now()
         texto = (c.get('pendente', '') + ' ' + t).strip()
 
@@ -641,18 +1038,13 @@ class LembretesApp(App):
                 c['pendente'] = texto
                 return 'Que horas devo te avisar {}, {}?'.format(desc_dias(dias), eu)
             c['pendente'] = ''
-            rems = carregar(RFILE, [])
-            rems.append({'id': uuid.uuid4().hex, 'texto': tarefa, 'dias': dias,
-                         'h': hh, 'm': mm, 'quando': 0, 'criado': time.time(),
-                         'visto_ate': time.time(), 'chat': c['id']})
-            salvar(RFILE, rems)
-            if c['nome'] == 'Nova conversa':
-                c['nome'] = tarefa[:28]
-                self.root.ids.titulo.text = c['nome']
+            self.novo_fixo(c, tarefa, dias, hh, mm)
             return escolha(
                 'Combinado, {eu}! "{t}", {d} às {h:02d}:{m:02d}. Esse lembrete fica ligado a esta conversa: se você apagar a conversa, ele para.',
                 'Pronto, {eu}! Vou te lembrar de "{t}" {d} às {h:02d}:{m:02d}. Se apagar esta conversa, esse lembrete fixo some junto.',
             ).format(eu=eu, t=tarefa, d=desc_dias(dias), h=hh, m=mm)
+
+        # --- lembrete de uma vez ---
         quando, tarefa = parse(texto, agora)
         if quando is None:
             if not c.get('pendente'):
@@ -668,29 +1060,28 @@ class LembretesApp(App):
         if quando <= agora:
             return 'Esse horário já passou, {}. Pode escrever de novo com outro dia ou hora?'.format(eu)
 
-        rems = carregar(RFILE, [])
-        rems.append({'id': uuid.uuid4().hex, 'texto': tarefa,
-                     'quando': quando.timestamp(), 'chat': c['id'], 'visto': False})
-        salvar(RFILE, rems)
-        if c['nome'] == 'Nova conversa':
-            c['nome'] = tarefa[:28]
-            self.root.ids.titulo.text = c['nome']
+        self.novo_lembrete(c, tarefa, quando)
         return escolha(
-            'Pronto, {eu}! Vou te avisar: "{t}", {q}. Pode ficar tranquila, é só uma notificação suave.',
+            'Pronto, {eu}! Vou te avisar: "{t}", {q}. A tela acende em silêncio, sem alarme.',
             'Anotado com carinho! "{t}", {q}. Eu cuido disso por você, {eu}.',
-            'Tá guardado, {eu}! "{t}", {q}. Sem alarme, só um aviso gentil.',
+            'Tá guardado, {eu}! "{t}", {q}. Sem som, só a tela acendendo com um botão para confirmar.',
         ).format(eu=eu, t=tarefa, q=fmt(quando, agora))
 
     def conversar(self, p):
-        """Respostas de conversa leve, sem precisar de internet."""
+        # Respostas de conversa leve, sem precisar de internet.
         eu, ia = self.eu, self.ia
+        if re.search(r'\btela cheia\b', p):
+            self.checar_tela_cheia(forcar=True)
+            return 'Certo, {}! Se o seu celular precisar de permissão, abro os ajustes para você.'.format(eu)
         if re.search(r'\b(quem e voce|como voce se chama|qual (?:e )?(?:o )?seu nome)\b', p):
             return ('Eu sou a {ia}, sua ajudante de lembretes, {eu}. Se quiser me dar outro nome, '
                     'é só dizer "seu nome agora é..." e eu guardo.').format(ia=ia, eu=eu)
         if re.search(r'\b(ajuda|como funciona|o que voce faz)\b', p):
-            return ('Eu guardo seus lembretes e te aviso com uma notificação suave, {eu}. '
-                    'Diga, por exemplo: "me lembra de ligar para a mãe amanhã às 10h".\n'
-                    'Também faço lembretes fixos: "de segunda a sexta às 8h me lembra de beber água" ou "toda quinta às 10h me lembra de ir ao mercado". Eles param se você apagar a conversa.\n'
+            return ('Eu guardo seus lembretes e, na hora, acendo a tela em silêncio com um botão '
+                    'para você confirmar, {eu}. Diga, por exemplo: "me lembra de ligar para a mãe '
+                    'amanhã às 10h".\n'
+                    'Também faço lembretes fixos: "de segunda a sexta às 8h me lembra de beber água" '
+                    'ou "toda quinta às 10h me lembra de ir ao mercado". Eles param se você apagar a conversa.\n'
                     'Comandos: "meus lembretes" mostra a lista; "me chama de ..." muda o seu nome; '
                     '"seu nome agora é ..." muda o meu.').format(eu=eu)
         if re.search(r'\b(cansad\w*|ansios\w*|estressad\w*|sobrecarregad\w*)\b', p):
@@ -787,7 +1178,14 @@ class LembretesApp(App):
             linha.add_widget(lb)
             linha.add_widget(bt)
             linhas.append(linha)
-        holder['pop'] = self.lista_popup('Meus lembretes', linhas)
+
+        novo = Button(text='+ Novo lembrete', size_hint_y=None, height=dp(52))
+
+        def criar(*a):
+            holder['pop'].dismiss()
+            self.nova_conversa()
+        novo.bind(on_release=criar)
+        holder['pop'] = self.lista_popup('Meus lembretes', linhas, extra=novo)
 
     def apagar(self, rid, holder):
         rems = [r for r in carregar(RFILE, []) if r['id'] != rid]
@@ -827,7 +1225,10 @@ class LembretesApp(App):
         self.chats = [c for c in self.chats if c['id'] != cid]
         salvar(CFILE, self.chats)
         # lembretes fixos pertencem à conversa: sem a conversa, eles param
-        salvar(RFILE, [r for r in carregar(RFILE, []) if not (r.get('dias') is not None and r.get('chat') == cid)])
+        salvar(RFILE, [r for r in carregar(RFILE, [])
+                       if not (r.get('dias') is not None and r.get('chat') == cid)])
+        if not self.chats:
+            self.nova_conversa(render=False)
         if self.cur == cid:
             self.cur = self.chats[0]['id']
             self.mostrar()
